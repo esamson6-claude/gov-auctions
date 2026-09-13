@@ -18,7 +18,7 @@ import sys
 
 from curl_cffi import requests as cr
 
-from .common import Lot, ScraperFailure
+from .common import Lot, ScraperFailure, browser_post_json
 
 SOURCE = "gsa"
 SEARCH_URL = "https://www.ppms.gov/gw/auction/ppms/api/v1/auctions"
@@ -49,9 +49,19 @@ def _search(codes: list[int], page: int, status: str = "active") -> dict:
     }
     r = cr.post(SEARCH_URL, params=params, json=body, impersonate="chrome",
                 timeout=60, headers={"Accept": "application/json"})
-    if r.status_code != 200:
-        raise ScraperFailure(f"gsa: HTTP {r.status_code} — {r.text[:120]}")
-    return r.json()
+    if r.status_code == 200:
+        return r.json()
+
+    # Refused as a plain client. This happens from CI runners (403 block page)
+    # while the same request from a browser is fine, so reissue it from inside
+    # a real page on gsaauctions.gov.
+    qs = f"?page={page}&size={PAGE_SIZE}&sort=auctionEndDate,ASC"
+    data = browser_post_json("https://www.gsaauctions.gov/auctions/home",
+                             SEARCH_URL, body, qs)
+    if isinstance(data, dict) and "__error" not in data:
+        return data
+    raise ScraperFailure(
+        f"gsa: HTTP {r.status_code} direct, and the browser fallback failed too")
 
 
 def _money(v) -> str | None:

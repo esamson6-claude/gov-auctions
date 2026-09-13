@@ -23,6 +23,7 @@ from curl_cffi import requests as cr
 from .common import (
     Auction,
     ScraperFailure,
+    browser_get_text,
     categories_from,
     operator_from,
     parse_date_range,
@@ -48,15 +49,26 @@ def _clean(fragment: str) -> str:
 
 
 def scrape() -> list[Auction]:
+    html_text = None
     try:
         r = cr.get(URL, impersonate="chrome", timeout=45)
+        if r.status_code == 200:
+            html_text = r.text
+        else:
+            print(f"  {SOURCE}: HTTP {r.status_code} direct — trying a browser",
+                  file=sys.stderr)
     except Exception as e:
-        raise ScraperFailure(f"cws: fetch failed — {e}") from e
-    if r.status_code != 200:
-        raise ScraperFailure(f"cws: HTTP {r.status_code}")
+        print(f"  {SOURCE}: direct fetch failed ({e}) — trying a browser",
+              file=sys.stderr)
 
-    save_raw(SOURCE, r.text)
-    cards = _CARD_RE.findall(r.text)
+    if html_text is None:
+        # CI runners get HTTP 202 here while a home connection gets 200.
+        html_text = browser_get_text(URL, wait_ms=7000)
+    if not html_text:
+        raise ScraperFailure("cws: blocked both directly and via a browser")
+
+    save_raw(SOURCE, html_text)
+    cards = _CARD_RE.findall(html_text)
     if not cards:
         raise ScraperFailure("cws: no .custom-card blocks — page layout changed?")
 

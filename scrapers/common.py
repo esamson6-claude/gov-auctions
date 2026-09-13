@@ -245,3 +245,85 @@ def save_raw(name: str, html: str) -> None:
     """Keep the fetched page so a parser bug can be diagnosed without refetching."""
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     (RAW_DIR / f"{name}.html").write_text(html, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Browser-routed fetching
+# ---------------------------------------------------------------------------
+#
+# Some sources serve plain HTTP clients happily from a home connection but
+# reject them from a CI runner: on GitHub Actions the CWS calendar returns
+# HTTP 202 and the GSA API returns a 403 block page, while both are fine
+# locally. Headed Chromium gets through where plain requests do not — that is
+# already proven for bid.cwsmarketing.com, whose CloudFront rule blocks
+# *headless* specifically.
+#
+# So: try plain HTTP first (fast, cheap), and fall back to driving a real
+# browser. No paid proxy involved.
+
+def _browser_context(playwright):
+    import tempfile
+    return playwright.chromium.launch_persistent_context(
+        tempfile.mkdtemp(),
+        headless=False,          # headless is the tell — see cws_lots docstring
+        viewport={"width": 1400, "height": 1000},
+        args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+    )
+
+
+def browser_get_text(url: str, wait_ms: int = 6000) -> Optional[str]:
+    """Full HTML of `url` as a real browser sees it. None if unavailable."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+    try:
+        with sync_playwright() as p:
+            ctx = _browser_context(p)
+            try:
+                page = ctx.pages[0]
+                page.goto(url, wait_until="domcontentloaded", timeout=90000)
+                page.wait_for_timeout(wait_ms)
+                return page.content()
+            finally:
+                ctx.close()
+    except Exception:
+        return None
+
+
+def browser_post_json(origin: str, api_url: str, payload: dict,
+                      params: str = "") -> Optional[dict]:
+    """POST JSON from inside a page on `origin` and return the parsed response.
+
+    Issued by the page itself rather than by Python, so it carries the browser's
+    own TLS fingerprint, cookies and Origin header — which is the whole point
+    when a plain client is being turned away.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None
+    try:
+        with sync_playwright() as p:
+            ctx = _browser_context(p)
+            try:
+                page = ctx.pages[0]
+                page.goto(origin, wait_until="domcontentloaded", timeout=90000)
+                page.wait_for_timeout(3000)
+                return page.evaluate(
+                    """async ([url, body]) => {
+                        const r = await fetch(url, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json',
+                                      'Accept': 'application/json'},
+                            body: JSON.stringify(body)
+                        });
+                        if (!r.ok) return {__error: r.status};
+                        return await r.json();
+                    }""",
+                    [api_url + params, payload],
+                )
+            finally:
+                ctx.close()
+    except Exception:
+        return None
