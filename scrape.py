@@ -33,7 +33,7 @@ FIELDS = [
     "description", "first_seen", "last_seen",
 ]
 
-SOURCES = ["scrapers.treasury", "scrapers.cws"]
+SOURCES = ["scrapers.treasury", "scrapers.cws", "scrapers.realestate"]
 
 LOT_FIELDS = [
     "source", "lot_id", "title", "sale_ref", "sale_title", "lot_number",

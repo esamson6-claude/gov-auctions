@@ -45,6 +45,7 @@ matching layouts is what makes code portable between them.
 |---|---|---|
 | `scrapers/treasury.py` | treasury.gov TEOAF calendar | Plain `<ul>`; the authoritative schedule, including sales with no catalog yet |
 | `scrapers/cws.py` | cwsmarketing.com upcoming auctions | WordPress `.custom-card`; richer — thumbnail, description, and individual real-estate sales Treasury never lists |
+| `scrapers/realestate.py` | realestatesales.gov | GSA real property. Each property is its own dated sale, so they are Auctions, not lots |
 | `scrapers/gsa_lots.py` | GSA Auctions JSON API | **Lots**, not sales. Public, no auth |
 | `scrapers/cws_lots.py` | bid.cwsmarketing.com catalogs | **Lots** inside a Treasury sale. Needs headed Chromium |
 
@@ -107,7 +108,8 @@ runner. Until then, run `scrape.py` locally to refresh them.
 
 ### Still deferred
 
-- **realestatesales.gov** — plain HTML, 52 KB, easy whenever wanted.
+Nothing blocking. Possible next sources: US Marshals Service forfeiture sales,
+and HiBid catalogs (Treasury vehicle sales link there rather than to CWS).
 
 ## Gotchas already hit
 
@@ -126,6 +128,10 @@ runner. Until then, run `scrape.py` locally to refresh them.
   a marina home. Both categories now use negative lookahead. **Test any
   category or filter change against `data/auctions.csv` before shipping it** —
   this bit three times in the sibling project too.
+- **realestatesales.gov hides the clean city after a `</span>`.** The `<h5>`
+  holds a truncated street inside a span ("Off County Road 31 (41.94...") and
+  the real "City, ST ZIP" after it. Parse the text following `</span>`, not the
+  whole element.
 - **Date formats differ per source.** Treasury writes `September 16-23, 2026`;
   CWS writes `Sep 9 2026 - Sep 16 2026`. The two-full-dates pattern must be
   tried *before* the single-date one, or the end of the sale is thrown away.
@@ -181,12 +187,10 @@ node --check /tmp/ga.js   # after extracting the inline <script>
 
 ## Current status (2026-09-13)
 
-30 sales (28 upcoming) and **75 lots** — 60 from GSA, 15 inside the two
-September Treasury catalogs. The page has two views: Auctions (the calendar) and
-Items for sale (individual aircraft, boats, vehicles), sharing one set of
-category chips.
+33 sales and 75 lots from 5 scrapers. Sales: 11 Treasury calendar, 19 CWS,
+3 GSA real property. Lots: 60 GSA, 15 inside the two September Treasury
+catalogs.
 
-No API keys. GSA and the calendars are plain HTTP locally; the CWS lot catalogs
-always need a browser, and on CI the CWS calendar does too. GSA lots refresh
-only on local runs — see above.
+Two views on the page — Auctions and Items for sale — sharing one set of
+category chips. No API keys anywhere.
 
