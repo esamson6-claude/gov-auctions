@@ -51,6 +51,33 @@ class Auction:
         return asdict(self)
 
 
+@dataclass
+class Lot:
+    """One item inside an auction — a specific aircraft, boat, vehicle…
+
+    Separate from Auction on purpose: a sale is a date on a calendar, a lot is a
+    thing you bid on. They have different lifetimes and different fields.
+    """
+
+    source: str
+    lot_id: str                          # unique within the source
+    title: str
+    sale_ref: str = ""                   # sale/catalog this lot belongs to
+    sale_title: str = ""
+    lot_number: str = ""
+    category: str = ""                   # aircraft | vessel | vehicle | …
+    end_date: str = ""                   # ISO date the lot closes
+    current_bid: Optional[str] = None
+    min_bid: Optional[str] = None
+    location: Optional[str] = None
+    url: str = ""
+    image_url: Optional[str] = None
+    description: Optional[str] = None
+
+    def as_row(self) -> dict:
+        return asdict(self)
+
+
 # ---------------------------------------------------------------------------
 # Dates
 # ---------------------------------------------------------------------------
@@ -167,6 +194,37 @@ def categories_from(text: str) -> str:
     blob = (text or "").upper()
     found = [name for name, pat in _CATEGORY_PATTERNS if re.search(pat, blob)]
     return "|".join(found) if found else "general"
+
+
+# Lots inside an aircraft or vessel sale are frequently components, not the
+# whole thing — "Wingtip Position Sensor", "40 HP Yamaha Outboard Motor",
+# "Float On Boat Trailer". Worth separating: someone shopping for an aeroplane
+# does not want a heat exchanger.
+_PART_RE = re.compile(
+    r"\bPARTS?\b|\bENGINES?\b|\bMOTORS?\b|SENSOR|EXCHANGE|RECIRCULATION"
+    r"|\bTRAILER\b|PROPELLERS?|WINGTIP|\bASSY\b|\bPUMPS?\b|GEARBOX"
+    r"|AVIONICS|\bRADIOS?\b|\bTIRES?\b|\bWHEELS?\b|GENERATOR|COMPRESSOR",
+    re.I,
+)
+
+
+def lot_category(title: str, sale_default: str = "") -> str:
+    """Category for a single lot, using the sale it belongs to as context.
+
+    A lot title rarely says "aircraft" or "vessel" — it says "Hawker 800A" or
+    "Boston Whaler 260 Outrage". Guessing from a list of manufacturer names
+    would be endless and wrong; the sale already tells us (catalog 458 IS the
+    Treasury aircraft sale), so that is the fallback.
+
+    Parts win over the sale default, so an aircraft sale's heat exchanger is not
+    filed as an aircraft.
+    """
+    if _PART_RE.search(title or ""):
+        return "parts"
+    named = categories_from(title)
+    if named != "general":
+        return named
+    return sale_default or "general"
 
 
 def operator_from(url: str | None, text: str = "") -> Optional[str]:

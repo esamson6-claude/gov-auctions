@@ -25,11 +25,13 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CSV_PATH = PROJECT_ROOT / "data" / "auctions.csv"
+LOTS_PATH = PROJECT_ROOT / "data" / "lots.csv"
 DOCS_DIR = PROJECT_ROOT / "docs"
 OUT_PATH = DOCS_DIR / "index.html"
 
 CATEGORY_LABELS = {
     "aircraft": "Aircraft",
+    "parts": "Parts",
     "vessel": "Vessels",
     "vehicle": "Vehicles",
     "real-estate": "Real estate",
@@ -149,6 +151,45 @@ def render() -> Path:
   </div>
 </a>''')
 
+    # ---- individual lots ----------------------------------------------------
+    lot_rows: list[dict] = []
+    if LOTS_PATH.exists():
+        with LOTS_PATH.open(newline="", encoding="utf-8") as f:
+            lot_rows = list(csv.DictReader(f))
+    lot_rows.sort(key=lambda r: (r["end_date"] or "9999", r["title"]))
+
+    lot_cards: list[str] = []
+    for r in lot_rows:
+        cat = r["category"] or "general"
+        if cat not in all_categories:
+            all_categories.append(cat)
+        end = r["end_date"]
+        text, urgency = (_countdown(end, end, today) if end
+                         else ("Closing date unknown", "tbd"))
+        price = r["current_bid"] or r["min_bid"] or ""
+        img = html.escape(r["image_url"] or "", quote=True) or PLACEHOLDER_IMG
+        blob = html.escape(" ".join([r["title"], r["sale_title"] or "",
+                                     r["location"] or ""]).lower(), quote=True)
+        bits = []
+        if r["location"]:
+            bits.append(html.escape(r["location"]))
+        if r["lot_number"]:
+            bits.append("Lot " + html.escape(r["lot_number"]))
+        lot_cards.append(f'''<a class="card lot" href="{html.escape(r["url"], quote=True)}"
+   target="_blank" rel="noopener" data-cats="{html.escape(cat, quote=True)}"
+   data-search="{blob}" data-closed="0" data-catalog="1">
+  <div class="thumb"><img loading="lazy" src="{img}" alt=""
+       onerror="this.src='{PLACEHOLDER_IMG}'"></div>
+  <div class="body">
+    <div class="when when-{urgency}">{html.escape(text)}</div>
+    <h2>{html.escape(r["title"])}</h2>
+    {f'<div class="price">{html.escape(price)}</div>' if price else ""}
+    <div class="cats"><span class="cat">{html.escape(CATEGORY_LABELS.get(cat, cat))}</span></div>
+    <div class="meta">{" · ".join(bits)}</div>
+    <div class="cta">{html.escape((r["sale_title"] or "View lot")[:52])} →</div>
+  </div>
+</a>''')
+
     chip_html = "".join(
         f'<button class="chip" data-cat="{html.escape(c, quote=True)}">'
         f'{html.escape(CATEGORY_LABELS.get(c, c))}</button>' for c in all_categories)
@@ -159,6 +200,8 @@ def render() -> Path:
         closed_count=len(rows) - upcoming,
         chips=chip_html,
         cards="\n".join(cards),
+        lot_cards="\n".join(lot_cards),
+        lot_total=len(lot_rows),
         placeholder=PLACEHOLDER_IMG,
     )
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
@@ -199,6 +242,13 @@ header {{ background:var(--card); border-bottom:1px solid var(--border);
 h1 {{ margin:0; font-size:18px; font-weight:650; }}
 .sub {{ color:var(--muted); font-size:12px; }}
 .filters {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center; }}
+.views {{ display:inline-flex; gap:6px; margin-left:auto; }}
+.vbtn {{ border:1px solid var(--border); background:var(--bg); color:var(--fg);
+  border-radius:6px; padding:5px 11px; font:inherit; font-size:13px; cursor:pointer; }}
+.vbtn.on {{ background:var(--chip-on); color:var(--chip-on-fg); border-color:var(--chip-on); }}
+.vbtn b {{ font-weight:700; opacity:.85; }}
+.showing {{ max-width:1500px; margin:0 auto 10px; font-size:12.5px; color:var(--muted); }}
+.price {{ font-size:14px; font-weight:650; color:var(--accent); }}
 .chip {{ border:1px solid var(--border); background:var(--bg); color:var(--fg);
   border-radius:999px; padding:4px 12px; font:inherit; font-size:13px; cursor:pointer; }}
 .chip.on {{ background:var(--chip-on); color:var(--chip-on-fg); border-color:var(--chip-on); }}
@@ -206,6 +256,9 @@ h1 {{ margin:0; font-size:18px; font-weight:650; }}
 label.tog {{ font-size:12.5px; color:var(--muted); cursor:pointer; display:inline-flex;
   gap:5px; align-items:center; }}
 main {{ padding:18px 20px 60px; }}
+/* Author display:grid beats the UA stylesheet's [hidden]{{display:none}}, so the
+   hidden grid stayed on screen while its counter showed the other view. */
+.grid[hidden] {{ display:none; }}
 .grid {{ display:grid; gap:14px;
   grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); max-width:1500px; margin:0 auto; }}
 .card {{ background:var(--card); border:1px solid var(--border); border-radius:10px;
@@ -234,8 +287,12 @@ main {{ padding:18px 20px 60px; }}
 </style></head><body>
 <header>
   <div class="htop">
-    <h1>US Government Auctions — <span id="count">{total}</span> upcoming</h1>
-    <span class="sub">Updated {generated} · click a card for its catalog</span>
+    <h1>US Government Auctions</h1>
+    <span class="sub">Updated {generated} · click any card to open it</span>
+    <span class="views">
+      <button id="view-sales" class="vbtn on">Auctions <b>{total}</b></button>
+      <button id="view-lots" class="vbtn">Items for sale <b>{lot_total}</b></button>
+    </span>
   </div>
   <div class="filters">
     {chips}
@@ -244,16 +301,28 @@ main {{ padding:18px 20px 60px; }}
   </div>
 </header>
 <main>
+  <div class="showing"><span id="count">{total}</span> shown</div>
   <div class="grid" id="grid">
 {cards}
   </div>
-  <div id="empty">No auctions match these filters.</div>
+  <div class="grid" id="lotgrid" hidden>
+{lot_cards}
+  </div>
+  <div id="empty">Nothing matches these filters.</div>
 </main>
 <script>
 (function () {{
-  var cards = Array.prototype.slice.call(document.querySelectorAll('.card'));
+  // Scope to the sales grid: lot cards also carry .card, and an unscoped
+  // selector made the sales view count every item on the page too.
+  var cards = Array.prototype.slice.call(document.querySelectorAll('#grid .card'));
   var chips = Array.prototype.slice.call(document.querySelectorAll('.chip'));
   var catOnly = document.getElementById('cat-only');
+  var lotCards = Array.prototype.slice.call(document.querySelectorAll('#lotgrid .card'));
+  var grid = document.getElementById('grid');
+  var lotGrid = document.getElementById('lotgrid');
+  var btnSales = document.getElementById('view-sales');
+  var btnLots = document.getElementById('view-lots');
+  var view = 'sales';
   var showClosed = document.getElementById('show-closed');
   var countEl = document.getElementById('count');
   var emptyEl = document.getElementById('empty');
@@ -266,7 +335,8 @@ main {{ padding:18px 20px 60px; }}
   function apply() {{
     var want = activeCats();
     var shown = 0;
-    cards.forEach(function (card) {{
+    var list = view === 'lots' ? lotCards : cards;
+    list.forEach(function (card) {{
       var cats = (card.dataset.cats || '').split('|');
       var show = true;
       // No chip selected means "everything" — an empty selection should not
@@ -293,6 +363,22 @@ main {{ padding:18px 20px 60px; }}
   }});
   catOnly.addEventListener('change', apply);
   showClosed.addEventListener('change', apply);
+
+  function setView(v) {{
+    view = v;
+    var lots = v === 'lots';
+    grid.hidden = lots;
+    lotGrid.hidden = !lots;
+    btnLots.classList.toggle('on', lots);
+    btnSales.classList.toggle('on', !lots);
+    // These two only mean anything for sales; hide them in the items view
+    // rather than leaving dead controls on screen.
+    catOnly.parentElement.style.display = lots ? 'none' : '';
+    showClosed.parentElement.style.display = lots ? 'none' : '';
+    apply();
+  }}
+  btnSales.addEventListener('click', function () {{ setView('sales'); }});
+  btnLots.addEventListener('click', function () {{ setView('lots'); }});
 
   // Run once at load, not only on interaction.
   apply();

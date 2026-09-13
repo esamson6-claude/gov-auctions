@@ -41,6 +41,8 @@ matching layouts is what makes code portable between them.
 |---|---|---|
 | `scrapers/treasury.py` | treasury.gov TEOAF calendar | Plain `<ul>`; the authoritative schedule, including sales with no catalog yet |
 | `scrapers/cws.py` | cwsmarketing.com upcoming auctions | WordPress `.custom-card`; richer — thumbnail, description, and individual real-estate sales Treasury never lists |
+| `scrapers/gsa_lots.py` | GSA Auctions JSON API | **Lots**, not sales. Public, no auth |
+| `scrapers/cws_lots.py` | bid.cwsmarketing.com catalogs | **Lots** inside a Treasury sale. Needs headed Chromium |
 
 A sale carries one of three `status` values, and all three are shown:
 
@@ -49,16 +51,40 @@ A sale carries one of three `status` values, and all three are shown:
 - `tbd` — announced with no date at all (the Riverside CA and Pompano Beach FL
   live/simulcast sales)
 
-### Known, deliberately deferred
+### Lots (individual items)
 
-- **`bid.cwsmarketing.com`** (lot level) answers **HTTP 202** — a bot challenge,
-  the same shape Trade-A-Plane throws in the aircraft project. Beating it needs
-  that project's ScrapingBee stealth fetcher.
-- **GSA Auctions** is a JS app over a JSON API at
-  `https://www.ppms.gov/gw/auction/ppms` (base URLs are in
-  `gsaauctions.gov/environment.js`). Every endpoint returns
-  `401 Token expired or invalid`; auth is Okta. If the token route is found this
-  becomes the best source here by far — structured JSON rather than scraped HTML.
+`data/lots.csv`, separate from `data/auctions.csv`: a sale is a date on a
+calendar, a lot is a thing you bid on.
+
+**GSA** — a public JSON gateway, no auth. Two traps:
+
+- The search endpoint is a **POST** to
+  `https://www.ppms.gov/gw/auction/ppms/api/v1/auctions`. A **GET** to the same
+  path returns `401 Token expired or invalid`, which reads like the whole API
+  needs credentials. It does not. Base URLs live in
+  `gsaauctions.gov/environment.js`; categories at `/api/v1/auction-categories`
+  (20 = aircraft, 40 = boats, 300/310/320 = vehicles).
+- **Images are deliberately skipped.** The SPA resolves them via
+  `/storage/presigned-urls`, and those URLs expire after **one hour** — useless
+  on a page rebuilt daily.
+
+**CWS catalogs** — `bid.cwsmarketing.com` is behind CloudFront:
+
+- plain HTTP clients get **HTTP 202** and a stub
+- **headless** Chromium gets **HTTP 403 "Request blocked"**
+- **headed** Chromium gets the real page
+
+So `cws_lots.py` runs headed with a throwaway profile, and CI wraps the run in
+`xvfb-run`. No paid proxy needed. Playwright is **pinned to 1.60.0** to match
+the Chromium build already cached locally.
+
+A lot's category comes from `lot_category()`, which uses the **sale** as
+context: a lot title says "Hawker 800A" or "Boston Whaler 260 Outrage", never
+"aircraft". Parts beat the sale default, so an aircraft sale's heat exchanger is
+filed as `parts`, not `aircraft`.
+
+### Still deferred
+
 - **realestatesales.gov** — plain HTML, 52 KB, easy whenever wanted.
 
 ## Gotchas already hit
@@ -77,6 +103,12 @@ A sale carries one of three `status` values, and all three are shown:
   carried forward. Returning `[]` would read as "no auctions" and wipe them.
 - **Closed sales sort last and are hidden by default.** Sorting purely by date
   put finished auctions at the top of a page about what's coming up.
+- **`.grid[hidden]` needs an explicit rule.** Author `display:grid` beats the UA
+  stylesheet's `[hidden] { display:none }`, so the hidden grid stayed on screen
+  while its counter showed the other view's number.
+- **Scope card selectors to their grid.** Lot cards also carry `.card`; an
+  unscoped `querySelectorAll('.card')` made the sales view count every item on
+  the page.
 
 ## Automation
 
@@ -114,6 +146,11 @@ node --check /tmp/ga.js   # after extracting the inline <script>
 
 ## Current status (2026-09-13)
 
-30 tracked sales (28 upcoming, 2 recently closed) from 2 sources: 6
-aircraft/vessel sales, 15 real estate, 2 vehicle, 6 general property.
-No API keys required — both sources serve plain HTML.
+30 sales (28 upcoming) and **75 lots** — 60 from GSA, 15 inside the two
+September Treasury catalogs. The page has two views: Auctions (the calendar) and
+Items for sale (individual aircraft, boats, vehicles), sharing one set of
+category chips.
+
+No API keys. GSA and the calendars are plain HTTP; only the CWS lot catalogs
+need a browser.
+

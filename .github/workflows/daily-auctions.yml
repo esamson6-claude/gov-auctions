@@ -25,9 +25,18 @@ jobs:
           python -m venv .venv
           .venv/bin/pip install --quiet --upgrade pip
           .venv/bin/pip install --quiet -r requirements.txt
+          # Chromium is needed for the CWS lot catalogs (see below).
+          .venv/bin/python -m playwright install --with-deps chromium
+          sudo apt-get install -y --no-install-recommends xvfb
 
-      - name: Collect auctions
-        run: .venv/bin/python scrape.py
+      - name: Collect auctions and lots
+        # xvfb-run because bid.cwsmarketing.com's CloudFront rule answers 403 to
+        # HEADLESS Chromium but serves headed Chromium normally — so the lot
+        # scraper runs headed, and headed needs an X server on a CI box.
+        # Everything else (Treasury, CWS calendar, the GSA JSON API) is plain
+        # HTTP and unaffected; if Chromium fails, lots are skipped and the
+        # auction calendar still publishes.
+        run: xvfb-run -a .venv/bin/python scrape.py
 
       - name: Build the page
         run: .venv/bin/python generate_html.py

@@ -17,6 +17,7 @@ from __future__ import annotations
 import csv
 import importlib
 import sys
+import re
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from scrapers.common import ScraperFailure
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 CSV_PATH = DATA_DIR / "auctions.csv"
+LOTS_PATH = DATA_DIR / "lots.csv"
 
 FIELDS = [
     "source", "title", "start_date", "end_date", "categories", "operator",
@@ -32,6 +34,16 @@ FIELDS = [
 ]
 
 SOURCES = ["scrapers.treasury", "scrapers.cws"]
+
+LOT_FIELDS = [
+    "source", "lot_id", "title", "sale_ref", "sale_title", "lot_number",
+    "category", "end_date", "current_bid", "min_bid", "location", "url",
+    "image_url", "description", "first_seen", "last_seen",
+]
+
+# Only open CWS catalogs whose sale is about something the site tracks get
+# opened for lots — each one costs a headed browser session of ~15 seconds.
+LOT_CATEGORIES = {"aircraft", "vessel", "vehicle"}
 
 # A sale stays listed for a week after it ends — useful for "did that Cessna
 # actually sell?" — then drops off. Sales with no date (TBD) never expire.
@@ -96,6 +108,74 @@ def run_all() -> tuple[list[dict], set[str]]:
     return rows, failed
 
 
+def collect_lots(events: list[dict]) -> list[dict]:
+    """Individual items, from GSA's API and from each open CWS catalog."""
+    lots: list[dict] = []
+
+    try:
+        from scrapers import gsa_lots
+        lots.extend(l.as_row() for l in gsa_lots.scrape())
+    except ScraperFailure as e:
+        print(f"  gsa_lots: HARD FAIL — {e}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"  gsa_lots: FAILED — {type(e).__name__}: {e}", file=sys.stderr)
+
+    try:
+        from scrapers import cws_lots
+    except Exception as e:  # noqa: BLE001
+        print(f"  cws_lots: unavailable — {e}", file=sys.stderr)
+        return lots
+
+    seen_catalogs: set[str] = set()
+    for ev in events:
+        url = ev.get("catalog_url") or ""
+        m = re.search(r"bid\.cwsmarketing\.com/auctions/catalog/id/(\d+)", url)
+        if not m:
+            continue
+        cats = set((ev.get("categories") or "").split("|"))
+        if not (cats & LOT_CATEGORIES):
+            continue
+        cid = m.group(1)
+        if cid in seen_catalogs:
+            continue
+        seen_catalogs.add(cid)
+        # The sale's own category is the fallback for each lot inside it — a
+        # lot title says "Hawker 800A", not "aircraft".
+        sale_cat = next((c for c in ("aircraft", "vessel", "vehicle") if c in cats), "")
+        try:
+            found = cws_lots.scrape_catalog(
+                cid, ev.get("title") or "", ev.get("end_date") or ev.get("start_date") or "",
+                sale_cat)
+            lots.extend(l.as_row() for l in found)
+        except ScraperFailure as e:
+            print(f"  cws_lots[{cid}]: {e}", file=sys.stderr)
+        except Exception as e:  # noqa: BLE001
+            print(f"  cws_lots[{cid}]: FAILED — {type(e).__name__}: {e}", file=sys.stderr)
+
+    return lots
+
+
+def write_lots(lots: list[dict], today_iso: str) -> int:
+    previous: dict[str, dict] = {}
+    if LOTS_PATH.exists():
+        with LOTS_PATH.open(newline="", encoding="utf-8") as f:
+            previous = {r["lot_id"]: r for r in csv.DictReader(f)}
+
+    rows = []
+    for lot in {l["lot_id"]: l for l in lots}.values():
+        rec = {f: (lot.get(f) or "") for f in LOT_FIELDS}
+        rec["first_seen"] = previous.get(lot["lot_id"], {}).get("first_seen") or today_iso
+        rec["last_seen"] = today_iso
+        rows.append(rec)
+    rows.sort(key=lambda r: (r["end_date"] or "9999", r["category"], r["title"]))
+
+    with LOTS_PATH.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=LOT_FIELDS)
+        w.writeheader()
+        w.writerows(rows)
+    return len(rows)
+
+
 def main() -> int:
     today = date.today()
     today_iso = today.isoformat()
@@ -141,8 +221,10 @@ def main() -> int:
         w.writeheader()
         w.writerows(live)
 
+    lot_count = write_lots(collect_lots(live), today_iso)
+
     new_count = sum(1 for r in live if r["first_seen"] == today_iso and previous)
-    print(f"Done. {len(live)} upcoming auctions"
+    print(f"Done. {len(live)} upcoming auctions, {lot_count} lots"
           f"{f', {new_count} new' if new_count else ''}"
           f"{f', {dropped} finished' if dropped else ''}"
           f" -> {CSV_PATH.name}", file=sys.stderr)
