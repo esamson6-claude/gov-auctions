@@ -108,23 +108,31 @@ def run_all() -> tuple[list[dict], set[str]]:
     return rows, failed
 
 
-def collect_lots(events: list[dict]) -> list[dict]:
-    """Individual items, from GSA's API and from each open CWS catalog."""
+def collect_lots(events: list[dict]) -> tuple[list[dict], set[str]]:
+    """Individual items, from GSA's API and from each open CWS catalog.
+
+    Returns (lots, failed sources) so the caller can carry forward rows a source
+    could not deliver this time — the same contract the auction sources use.
+    """
     lots: list[dict] = []
+    failed: set[str] = set()
 
     try:
         from scrapers import gsa_lots
         lots.extend(l.as_row() for l in gsa_lots.scrape())
     except ScraperFailure as e:
+        failed.add("gsa")
         print(f"  gsa_lots: HARD FAIL — {e}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001
+        failed.add("gsa")
         print(f"  gsa_lots: FAILED — {type(e).__name__}: {e}", file=sys.stderr)
 
     try:
         from scrapers import cws_lots
     except Exception as e:  # noqa: BLE001
+        failed.add("cws")
         print(f"  cws_lots: unavailable — {e}", file=sys.stderr)
-        return lots
+        return lots, failed
 
     seen_catalogs: set[str] = set()
     for ev in events:
@@ -148,24 +156,45 @@ def collect_lots(events: list[dict]) -> list[dict]:
                 sale_cat)
             lots.extend(l.as_row() for l in found)
         except ScraperFailure as e:
+            failed.add("cws")
             print(f"  cws_lots[{cid}]: {e}", file=sys.stderr)
         except Exception as e:  # noqa: BLE001
+            failed.add("cws")
             print(f"  cws_lots[{cid}]: FAILED — {type(e).__name__}: {e}", file=sys.stderr)
 
-    return lots
+    return lots, failed
 
 
-def write_lots(lots: list[dict], today_iso: str) -> int:
+def write_lots(lots: list[dict], today_iso: str, failed: set[str]) -> int:
     previous: dict[str, dict] = {}
     if LOTS_PATH.exists():
         with LOTS_PATH.open(newline="", encoding="utf-8") as f:
             previous = {r["lot_id"]: r for r in csv.DictReader(f)}
 
+    current = {l["lot_id"]: l for l in lots}
+
+    # GSA blocks GitHub Actions IP ranges outright — direct AND through a
+    # browser — so a cloud run legitimately cannot fetch its lots even though a
+    # local run can. Without this, every nightly run would delete 60 real lots
+    # and the site would shrink to whatever CI can reach. Carried rows keep
+    # their old last_seen, so staleness stays visible.
+    if failed:
+        carried = 0
+        for lot_id, row in previous.items():
+            if row.get("source") in failed and lot_id not in current:
+                current[lot_id] = row
+                carried += 1
+        if carried:
+            print(f"  carried over {carried} lot(s) from failed sources",
+                  file=sys.stderr)
+
     rows = []
-    for lot in {l["lot_id"]: l for l in lots}.values():
+    for lot in current.values():
         rec = {f: (lot.get(f) or "") for f in LOT_FIELDS}
         rec["first_seen"] = previous.get(lot["lot_id"], {}).get("first_seen") or today_iso
-        rec["last_seen"] = today_iso
+        # A carried row was not seen today; keep its real last_seen so a stale
+        # lot reads as stale instead of freshly confirmed.
+        rec["last_seen"] = lot.get("last_seen") or today_iso if lot.get("lot_id") in previous and lot.get("source") in failed else today_iso
         rows.append(rec)
     rows.sort(key=lambda r: (r["end_date"] or "9999", r["category"], r["title"]))
 
@@ -221,7 +250,8 @@ def main() -> int:
         w.writeheader()
         w.writerows(live)
 
-    lot_count = write_lots(collect_lots(live), today_iso)
+    collected_lots, lot_failed = collect_lots(live)
+    lot_count = write_lots(collected_lots, today_iso, lot_failed)
 
     new_count = sum(1 for r in live if r["first_seen"] == today_iso and previous)
     print(f"Done. {len(live)} upcoming auctions, {lot_count} lots"

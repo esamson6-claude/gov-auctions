@@ -87,6 +87,24 @@ context: a lot title says "Hawker 800A" or "Boston Whaler 260 Outrage", never
 "aircraft". Parts beat the sale default, so an aircraft sale's heat exchanger is
 filed as `parts`, not `aircraft`.
 
+### GSA blocks CI, and a browser does not help
+
+**GitHub Actions IP ranges are refused by GSA's edge.** Measured: direct request
+403s from a runner, and reissuing it from inside headed Chromium on the same
+runner 403s too — so this is the IP, not the client fingerprint. (The CWS
+calendar is different: it returns 202 to a plain client on CI but serves the
+browser fine, which is why `browser_get_text()` recovers it.)
+
+Consequence: a cloud run cannot fetch GSA lots at all, while a local run can.
+`write_lots()` therefore carries forward the previous rows of any lot source
+that failed — without it every nightly run would delete 60 real lots and the
+site would shrink to whatever CI can reach. Carried rows keep their old
+`last_seen`, so staleness stays visible.
+
+To make GSA lots refresh in the cloud, the request has to leave from somewhere
+else: a proxy (ScrapingBee, as the sibling project uses) or a self-hosted
+runner. Until then, run `scrape.py` locally to refresh them.
+
 ### Still deferred
 
 - **realestatesales.gov** — plain HTML, 52 KB, easy whenever wanted.
@@ -158,6 +176,7 @@ September Treasury catalogs. The page has two views: Auctions (the calendar) and
 Items for sale (individual aircraft, boats, vehicles), sharing one set of
 category chips.
 
-No API keys. GSA and the calendars are plain HTTP; only the CWS lot catalogs
-need a browser.
+No API keys. GSA and the calendars are plain HTTP locally; the CWS lot catalogs
+always need a browser, and on CI the CWS calendar does too. GSA lots refresh
+only on local runs — see above.
 
