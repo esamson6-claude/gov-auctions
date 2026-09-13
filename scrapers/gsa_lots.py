@@ -22,7 +22,12 @@ from .common import Lot, ScraperFailure, browser_post_json
 
 SOURCE = "gsa"
 SEARCH_URL = "https://www.ppms.gov/gw/auction/ppms/api/v1/auctions"
-LOT_URL = "https://www.gsaauctions.gov/auctions/auction-details/{auction_id}"
+# The SPA's lot route is /auctions/preview/<auctionId>. NOT
+# /auctions/auction-details/<id>, which silently redirects to
+# /auctions/not-found — and cannot be caught with a status check, because the
+# app answers HTTP 200 for every route, valid or not. Verify SPA URLs by
+# loading them in a browser and reading the page, never by status code.
+LOT_URL = "https://www.gsaauctions.gov/auctions/preview/{auction_id}"
 PAGE_SIZE = 100
 
 # GSA category code -> this project's category vocabulary. Only the asset types

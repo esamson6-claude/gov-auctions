@@ -128,6 +128,11 @@ and HiBid catalogs (Treasury vehicle sales link there rather than to CWS).
   a marina home. Both categories now use negative lookahead. **Test any
   category or filter change against `data/auctions.csv` before shipping it** —
   this bit three times in the sibling project too.
+- **Never verify a single-page app's URL with a status code.** gsaauctions.gov
+  answers HTTP 200 for *every* route and then redirects to
+  `/auctions/not-found` in the browser. A `curl` check therefore "passed" on a
+  wrong lot URL and shipped 60 dead links. The lot route is
+  `/auctions/preview/<auctionId>`. Load SPA URLs in a browser and read the page.
 - **realestatesales.gov hides the clean city after a `</span>`.** The `<h5>`
   holds a truncated street inside a span ("Off County Road 31 (41.94...") and
   the real "City, ST ZIP" after it. Parse the text following `</span>`, not the
