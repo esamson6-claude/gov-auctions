@@ -111,6 +111,16 @@ runner. Until then, run `scrape.py` locally to refresh them.
 
 ## Gotchas already hit
 
+- **After pulling a cloud data commit, re-run the pipeline before committing.**
+  A local run can produce a file byte-identical to what is already in your
+  working tree; `git add` then stages nothing, your commit carries no change to
+  it, and rebasing onto the cloud's version silently replaces your data. This
+  is not a `-X theirs` problem — that flag only decides *conflicting* hunks, and
+  a commit with no hunk has nothing to win with. It cost the 60 GSA lots once:
+  the site dropped to 15 and the fix commit turned out to contain no
+  `lots.csv` change at all. Always check `git show --stat <sha> -- data/` before
+  assuming data went up with the code.
+
 - **Asset keywords match property features.** `\bCAR\b` matched "2-car garage"
   and tagged every house as a vehicle auction; `\bBOAT\b` matched "boat dock" on
   a marina home. Both categories now use negative lookahead. **Test any
