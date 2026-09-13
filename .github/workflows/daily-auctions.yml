@@ -1,0 +1,58 @@
+name: Daily auction refresh
+
+on:
+  schedule:
+    # 06:17 UTC (~2:17 AM ET). Off-peak and off-the-hour on purpose: GitHub runs
+    # scheduled workflows on a best-effort queue, and top-of-the-hour slots
+    # inside US working hours routinely start hours late.
+    - cron: '17 6 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install --quiet -r requirements.txt
+
+      - name: Collect auctions
+        run: .venv/bin/python scrape.py
+
+      - name: Build the page
+        run: .venv/bin/python generate_html.py
+
+      - name: Commit and push if there are changes
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ docs/
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Daily update: $(date -u +%Y-%m-%d)"
+            # Rebase before pushing. A plain push loses the whole run if anyone
+            # pushes to main while it is working — that cost a 91-minute scrape
+            # in the sibling backcountry-aircraft project.
+            #
+            # -X theirs, NOT -X ours: during a rebase the sides are inverted.
+            # "ours" is the upstream being replayed onto, "theirs" is the commit
+            # being replayed — i.e. this run's data, which is what we want.
+            for attempt in 1 2 3; do
+              git pull --rebase -X theirs origin main && git push && exit 0
+              echo "push attempt $attempt failed; retrying"
+              sleep 10
+            done
+            echo "::error::could not push after 3 attempts"
+            exit 1
+          fi
