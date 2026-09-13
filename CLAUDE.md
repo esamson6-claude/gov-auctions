@@ -1,16 +1,20 @@
 # gov-auctions
 
-Tracks upcoming **US government auction events** — the sales themselves, not the
-individual lots inside them — and publishes them as a filterable page.
+Tracks **US government auctions** — both the sales on the calendar and the
+individual aircraft, boats and vehicles inside them — as a filterable page.
 
-**Live site:** (set after the first Pages deploy)
+**Live site:** https://esamson6-claude.github.io/gov-auctions/
 
-## What this is and isn't
+## What this is
 
-It answers "what government auctions are coming up, and which have aircraft or
-boats in them?" It does **not** list the individual aircraft, cars, boats or
-properties inside a sale. That distinction drives the whole data model: one row
-per *sale*, with a link out to the operator's catalog.
+Two things, kept in two tables because they are two different objects:
+
+- **Sales** (`data/auctions.csv`) — a date on a calendar, its operator, and a
+  link to the catalog. Answers "what is coming up?"
+- **Lots** (`data/lots.csv`) — a specific thing you can bid on. Answers "what
+  aircraft are actually in the September Treasury sale?"
+
+The page shows them as two views sharing one set of category chips.
 
 Aircraft and vessels were the starting point; real estate arrived free, because
 CWS lists Treasury property sales individually with addresses and photos.
@@ -126,7 +130,10 @@ being replayed, i.e. this run's own data.
 ```bash
 cd ~/Projects/gov-auctions
 git pull
-.venv/bin/python scrape.py          # ~5s, no API keys needed
+# Sales + GSA lots are plain HTTP; the CWS lot catalogs open a headed browser,
+# so expect ~1 min rather than seconds.
+LD_LIBRARY_PATH=$HOME/.local/browserlibs/extracted/usr/lib/x86_64-linux-gnu \
+  .venv/bin/python scrape.py
 .venv/bin/python generate_html.py   # writes docs/index.html
 ```
 
